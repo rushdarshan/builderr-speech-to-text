@@ -15,7 +15,7 @@ from solution.transcribe import transcribe
 
 
 def main():
-    manifest = json.load(open(os.path.join(HERE, "data/dev/manifest.json")))
+    manifest = json.load(open(os.path.join(HERE, "data/dev/manifest.json"), encoding="utf-8"))
     block_network()  # mirror official scoring: no cloud during the run
     rows = []
     for clip in manifest:

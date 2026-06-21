@@ -1,99 +1,174 @@
-"""The ONE function you implement for the STREAMING dictation track.
+"""Streaming draft() function for the builderr STREAMING dictation track.
 
-You do NOT build a server. The sealed harness (solution/stream_server.py) handles
-the WebSocket, the real-time audio feed, and emitting events. You write `draft()`.
+Policy: LocalAgreement-2 — commit a word only when it appears identically in
+two consecutive decode passes on overlapping audio windows. This ensures
+revision_churn stays well under 0.5 while still producing timely partials.
 
-    draft(audio_buffer, is_final) -> (text_so_far, stable_chars)
-
-The harness calls draft() repeatedly as audio arrives (is_final=False) and once
-after the user stops (is_final=True). audio_buffer is ALL audio so far: raw PCM
-s16le, mono, 16kHz (little-endian int16). Return:
-
-  - text_so_far : your best transcript of the audio heard so far. Keep the
-                  Hindi-English code-switch faithful — write what was actually
-                  said, don't translate the mix into English (the scorecard caps
-                  that). On is_final=True, return your best full transcript.
-  - stable_chars: length of the leading prefix of text_so_far you COMMIT to —
-                  you promise never to rewrite it. Must be non-decreasing across
-                  calls. Rewriting committed text counts as revision churn.
-
-Tips that match how the reference engine (RambleFix) does it:
-  - Re-decode the rolling prefix; commit the longest common prefix with your
-    previous draft (that part has stopped changing — safe to lock).
-  - Don't translate to chase a meaning score; it kills faithfulness and is capped.
-  - Be fast on the first useful partial (TTFS is scored) and on the final
-    (end-to-final is the main latency axis).
-  - Never return a blank, a loop, or hang — degrade to your best partial instead.
-
-This reference body wraps a local faster-whisper draft on the rolling buffer and
-commits the stable common prefix. If faster-whisper isn't installed it returns an
-empty draft (clearly a non-winning placeholder) so the contract still validates.
-Replace the body with your own router + Hindi-capable model + finalizer.
+For Hinglish clips: during partials, if language confidence is not strongly
+English, stable_chars=0 is returned so no partial text is firmed up. On final,
+the specialist produces the definitive romanized Hinglish transcription.
 """
 from __future__ import annotations
 
+import os
 import re
 
-_SR = 16000
-_MIN_AUDIO_BYTES = int(_SR * 0.75) * 2  # ~0.75s before the first draft (2 bytes/sample)
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
-# per-clip state (the harness calls draft_reset() between clips)
+_SR = 16000
+_MIN_AUDIO_BYTES = int(_SR * 0.75) * 2
+
+_HI_TOKEN = 50276
+_EN_TOKEN = 50259
+_TRANSLATE_TOKEN = 50358
+
+_EN_CONFIDENCE_FLOOR = 0.85
+_HI_CONFIDENCE_CEILING = 0.15
+
+_fast_backend: str | None = None
+_fast_model = None
+_specialist_model = None
+_specialist_proc = None
+_np = None
+_torch = None
+
 _prev_text: str = ""
 _committed: str = ""
-_model = None
-_np = None
 
 
-def draft_reset() -> None:
-    """Called by the sealed harness at the start of each clip. Clear per-clip state."""
-    global _prev_text, _committed
-    _prev_text = ""
-    _committed = ""
+def _load_fast():
+    global _fast_model, _fast_backend
+    if _fast_model is not None:
+        return _fast_model
+    import platform
+    _is_mac = platform.system() == "Darwin" and platform.machine() in ("arm64", "x86_64")
+    if _is_mac:
+        try:
+            import mlx_whisper  # noqa: F401
+            _fast_backend = "mlx-whisper"
+            _fast_model = mlx_whisper
+            return _fast_model
+        except ImportError:
+            pass
+        try:
+            import whisper_cpp_py  # noqa: F401
+            _fast_backend = "whisper.cpp"
+            _fast_model = whisper_cpp_py.Whisper("small")
+            return _fast_model
+        except ImportError:
+            pass
+    from faster_whisper import WhisperModel
+    _fast_backend = "faster-whisper"
+    _fast_model = WhisperModel("small", device="cpu", compute_type="int8")
+    return _fast_model
 
 
-def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
-    global _prev_text, _committed
-    if not is_final and len(audio_buffer) < _MIN_AUDIO_BYTES:
-        return (_committed, len(_committed))
-
-    text = _transcribe_pcm(audio_buffer)
-    if not text:
-        # never blank-out a committed prefix; hold what we have
-        return (_committed, len(_committed))
-
-    # commit the longest common WORD prefix with the previous draft — that part
-    # has stabilized across two decodes, so it's safe to lock.
-    stable_text = _common_word_prefix(_prev_text, text)
-    if len(stable_text) >= len(_committed):
-        _committed = stable_text
-    _prev_text = text
-
-    if is_final:
-        # final: everything is committed; return the full transcript
-        _committed = text
-        return (text, len(text))
-
-    return (text, len(_committed))
+def _load_specialist():
+    global _specialist_model, _specialist_proc
+    if _specialist_model is None:
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor
+        model_id = "Oriserve/Whisper-Hindi2Hinglish-Swift"
+        _specialist_proc = WhisperProcessor.from_pretrained(model_id)
+        _specialist_model = WhisperForConditionalGeneration.from_pretrained(model_id)
+        _specialist_model.eval()
+    return _specialist_model, _specialist_proc
 
 
-def _transcribe_pcm(audio_buffer: bytes) -> str:
-    """Local, offline ASR on the rolling PCM prefix. Reference uses faster-whisper."""
-    global _model, _np
-    try:
-        if _np is None:
-            import numpy as np
-            _np = np
-        if _model is None:
-            from faster_whisper import WhisperModel  # local; offline once cached
-            _model = WhisperModel("small", device="cpu", compute_type="int8")
-        # int16 PCM -> float32 [-1, 1]
-        audio = _np.frombuffer(audio_buffer, dtype=_np.int16).astype(_np.float32) / 32768.0
-        if audio.size == 0:
-            return ""
-        segments, _info = _model.transcribe(audio, language=None, task="transcribe")
-        return " ".join(s.text for s in segments).strip()
-    except Exception:  # noqa: BLE001 - no model installed yet, or transient decode error
-        return ""
+def _load_torch():
+    global _torch
+    if _torch is None:
+        import torch
+        _torch = torch
+    return _torch
+
+
+def _pcm_to_float32(pcm: bytes) -> np.ndarray:
+    global _np
+    if _np is None:
+        import numpy as np
+        _np = np
+    return _np.frombuffer(pcm, dtype=_np.int16).astype(_np.float32) / 32768.0
+
+
+def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, dict]:
+    if _fast_backend == "mlx-whisper":
+        import mlx_whisper
+        result = mlx_whisper.transcribe(
+            audio,
+            path="mlx-community/whisper-small-mlx",
+            language=language,
+            task="transcribe",
+            condition_on_previous_text=False,
+            temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+            compression_ratio_threshold=2.2,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            no_repeat_ngram_size=3,
+            suppress_tokens=[_TRANSLATE_TOKEN],
+            word_timestamps=False,
+        )
+        text = (result.get("text") or "").strip()
+        detected = result.get("language", language or "en")
+        return text, {
+            "language": detected,
+            "language_probability": 1.0,
+            "all_language_probs": {detected: 1.0},
+        }
+    model = _load_fast()
+    segments, info = model.transcribe(
+        audio,
+        language=language,
+        task="transcribe",
+        condition_on_previous_text=False,
+        temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+        compression_ratio_threshold=2.2,
+        log_prob_threshold=-1.0,
+        no_speech_threshold=0.6,
+        no_repeat_ngram_size=3,
+        vad_filter=False,
+        suppress_tokens=[_TRANSLATE_TOKEN],
+    )
+    text = " ".join(s.text for s in segments).strip()
+    info_dict = {
+        "language": info.language,
+        "language_probability": float(info.language_probability),
+        "all_language_probs": dict(info.all_language_probs) if info.all_language_probs else {},
+    }
+    return text, info_dict
+
+
+def _decode_specialist(audio: np.ndarray) -> str:
+    model, processor = _load_specialist()
+    torch = _load_torch()
+    inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+    with torch.no_grad():
+        generated = model.generate(
+            inputs.input_features,
+            task="transcribe",
+            return_timestamps=False,
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.1,
+            max_length=448,
+            suppress_tokens=[_TRANSLATE_TOKEN],
+        )
+    text = processor.batch_decode(generated, skip_special_tokens=True)[0]
+    return text.strip()
+
+
+def _is_mixed(info_dict: dict) -> bool:
+    probs = info_dict.get("all_language_probs", {})
+    p_en = probs.get("en", 0.0)
+    p_hi = probs.get("hi", 0.0)
+    return p_en < _EN_CONFIDENCE_FLOOR and p_hi > _HI_CONFIDENCE_CEILING
+
+
+def _is_confidently_english(info_dict: dict) -> bool:
+    probs = info_dict.get("all_language_probs", {})
+    return probs.get("en", 0.0) >= _EN_CONFIDENCE_FLOOR
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[\w'.-]+", text, flags=re.UNICODE)
 
 
 def _common_word_prefix(left: str, right: str) -> str:
@@ -106,5 +181,50 @@ def _common_word_prefix(left: str, right: str) -> str:
     return " ".join(out)
 
 
-def _words(text: str) -> list[str]:
-    return re.findall(r"[\w'.-]+", text, flags=re.UNICODE)
+def draft_reset() -> None:
+    global _prev_text, _committed
+    _prev_text = ""
+    _committed = ""
+
+
+def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
+    global _prev_text, _committed
+
+    if not is_final and len(audio_buffer) < _MIN_AUDIO_BYTES:
+        return (_committed, len(_committed))
+
+    audio_float = _pcm_to_float32(audio_buffer)
+    if audio_float.size == 0:
+        return (_committed, len(_committed))
+
+    cur_text, info_dict = _decode_fast(audio_float, language=None)
+
+    if not cur_text:
+        return (_committed, len(_committed))
+
+    if is_final:
+        if _is_mixed(info_dict):
+            specialist_text = _decode_specialist(audio_float)
+            if specialist_text:
+                _committed = specialist_text
+                _prev_text = specialist_text
+                return (specialist_text, len(specialist_text))
+        _committed = cur_text
+        _prev_text = cur_text
+        return (cur_text, len(cur_text))
+
+    if not _is_confidently_english(info_dict):
+        _prev_text = cur_text
+        return (cur_text, 0)
+
+    if _prev_text:
+        agreed = _common_word_prefix(_prev_text, cur_text)
+        if len(agreed) >= len(_committed):
+            _committed = agreed
+
+    _prev_text = cur_text
+
+    return (cur_text, len(_committed))
+
+
+_load_fast()
