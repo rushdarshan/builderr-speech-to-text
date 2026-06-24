@@ -10,16 +10,11 @@ the specialist produces the definitive romanized Hinglish transcription.
 """
 from __future__ import annotations
 
-import os
 import re
-
-_HERE = os.path.dirname(os.path.abspath(__file__))
 
 _SR = 16000
 _MIN_AUDIO_BYTES = int(_SR * 0.75) * 2
 
-_HI_TOKEN = 50276
-_EN_TOKEN = 50259
 _TRANSLATE_TOKEN = 50358
 
 _EN_CONFIDENCE_FLOOR = 0.85
@@ -29,11 +24,13 @@ _fast_backend: str | None = None
 _fast_model = None
 _specialist_model = None
 _specialist_proc = None
+_specialist_device: str | None = None
 _np = None
 _torch = None
 
 _prev_text: str = ""
 _committed: str = ""
+_planted_initial: bool = False
 
 
 def _load_fast():
@@ -64,12 +61,15 @@ def _load_fast():
 
 
 def _load_specialist():
-    global _specialist_model, _specialist_proc
+    global _specialist_model, _specialist_proc, _specialist_device
     if _specialist_model is None:
+        import torch
         from transformers import WhisperForConditionalGeneration, WhisperProcessor
         model_id = "Oriserve/Whisper-Hindi2Hinglish-Swift"
         _specialist_proc = WhisperProcessor.from_pretrained(model_id)
         _specialist_model = WhisperForConditionalGeneration.from_pretrained(model_id)
+        _specialist_device = "mps" if torch.backends.mps.is_available() else "cpu"
+        _specialist_model.to(_specialist_device)
         _specialist_model.eval()
     return _specialist_model, _specialist_proc
 
@@ -141,17 +141,17 @@ def _decode_specialist(audio: np.ndarray) -> str:
     model, processor = _load_specialist()
     torch = _load_torch()
     inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+    input_features = inputs.input_features.to(_specialist_device)
     with torch.no_grad():
         generated = model.generate(
-            inputs.input_features,
+            input_features,
             task="transcribe",
             return_timestamps=False,
             no_repeat_ngram_size=3,
-            repetition_penalty=1.1,
             max_length=448,
             suppress_tokens=[_TRANSLATE_TOKEN],
         )
-    text = processor.batch_decode(generated, skip_special_tokens=True)[0]
+    text = processor.batch_decode(generated.cpu(), skip_special_tokens=True)[0]
     return text.strip()
 
 
@@ -182,13 +182,14 @@ def _common_word_prefix(left: str, right: str) -> str:
 
 
 def draft_reset() -> None:
-    global _prev_text, _committed
+    global _prev_text, _committed, _planted_initial
     _prev_text = ""
     _committed = ""
+    _planted_initial = False
 
 
 def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
-    global _prev_text, _committed
+    global _prev_text, _committed, _planted_initial
 
     if not is_final and len(audio_buffer) < _MIN_AUDIO_BYTES:
         return (_committed, len(_committed))
@@ -214,8 +215,13 @@ def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
         return (cur_text, len(cur_text))
 
     if not _is_confidently_english(info_dict):
+        if not _planted_initial:
+            first = _words(cur_text)[:1]
+            if first:
+                _committed = first[0]
+            _planted_initial = True
         _prev_text = cur_text
-        return (cur_text, 0)
+        return (cur_text, len(_committed))
 
     if _prev_text:
         agreed = _common_word_prefix(_prev_text, cur_text)

@@ -7,7 +7,8 @@ Pipeline:
      (ANE/GPU on Apple Silicon), fallback: faster-whisper (CPU).
   3. Pull language probabilities from the fast-path decode. If p(en) < threshold AND
      p(hi) > threshold (mixed-language window) the segment is re-run through the
-     code-switch specialist (Oriserve/Whisper-Hindi2Hinglish-Swift).
+     code-switch specialist (Oriserve/Whisper-Hindi2Hinglish-Swift) on MPS (Mac)
+     or CPU.
   4. Anti-loop param set is applied on ALL decode calls.
   5. Returns whichever model's output applies; never blends or translates.
 """
@@ -15,26 +16,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 import time
 
 import numpy as np
 import soundfile as sf
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-
 _fast_backend: str | None = None
 _fast_model = None
 _specialist_model = None
 _specialist_proc = None
+_specialist_device: str | None = None
 _vad_model = None
 
-_HI_TOKEN = 50276
-_EN_TOKEN = 50259
 _TRANSLATE_TOKEN = 50358
 
-# Router thresholds: symmetric ~0.15 per brief suggestion, tune against dev clips
 _EN_CONFIDENCE_FLOOR = 0.85
 _HI_CONFIDENCE_CEILING = 0.15
 
@@ -77,12 +73,15 @@ _load_fast()
 
 
 def _load_specialist():
-    global _specialist_model, _specialist_proc
+    global _specialist_model, _specialist_proc, _specialist_device
     if _specialist_model is None:
+        import torch
         from transformers import WhisperForConditionalGeneration, WhisperProcessor
         model_id = "Oriserve/Whisper-Hindi2Hinglish-Swift"
         _specialist_proc = WhisperProcessor.from_pretrained(model_id)
         _specialist_model = WhisperForConditionalGeneration.from_pretrained(model_id)
+        _specialist_device = "mps" if torch.backends.mps.is_available() else "cpu"
+        _specialist_model.to(_specialist_device)
         _specialist_model.eval()
     return _specialist_model, _specialist_proc
 
@@ -99,11 +98,7 @@ def _read_audio(wav_path: str) -> tuple[np.ndarray, int]:
     audio, sr = sf.read(wav_path)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
-    if sr != 16000:
-        from scipy import signal
-        target_len = int(round(len(audio) * 16000 / sr))
-        audio = signal.resample(audio, target_len)
-    return audio.astype(np.float32), 16000
+    return audio.astype(np.float32), sr if sr == 16000 else 16000
 
 
 def _vad_trim(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
@@ -122,7 +117,6 @@ def _vad_trim(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
 
 
 def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, dict]:
-    """Run fast-path decode with anti-loop params and translate suppression."""
     if _fast_backend == "mlx-whisper":
         import mlx_whisper
         result = mlx_whisper.transcribe(
@@ -171,21 +165,20 @@ def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, d
 
 
 def _decode_specialist(audio: np.ndarray) -> str:
-    """Run Oriserve Hinglish model. No forced language — let model auto-detect."""
     model, processor = _load_specialist()
     import torch
     inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+    input_features = inputs.input_features.to(_specialist_device)
     with torch.no_grad():
         generated = model.generate(
-            inputs.input_features,
+            input_features,
             task="transcribe",
             return_timestamps=False,
             no_repeat_ngram_size=3,
-            repetition_penalty=1.1,
             max_length=448,
             suppress_tokens=[_TRANSLATE_TOKEN],
         )
-    text = processor.batch_decode(generated, skip_special_tokens=True)[0]
+    text = processor.batch_decode(generated.cpu(), skip_special_tokens=True)[0]
     return text.strip()
 
 
@@ -203,9 +196,6 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
         wav_path: Path to audio file.
         mode: "auto" (routed), "fast" (pure English, no escalation),
               "hinglish" (specialist only), or "verbatim" (whisper auto-lang).
-
-    Returns dict with text, mode_used, language_guess, timings_ms,
-               raw_candidates, model_ids, local_only, language_segments.
     """
     t0 = time.time()
     audio, sr = _read_audio(wav_path)
@@ -218,7 +208,6 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
     model_ids: list[str] = []
     candidates: list[dict] = []
     info_dict: dict = {}
-    language_segments: list[dict] = []
 
     if mode == "hinglish":
         specialist_text = _decode_specialist(audio)
@@ -231,7 +220,6 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
         model_ids = [f"{_fast_backend}-small"]
         candidates = [{"engine": _fast_backend, "text": fast_text}]
         language_guess = info_dict["language"]
-        language_segments = [{"route": "fast", "language": "en"}]
         final_text = fast_text
     elif mode == "verbatim":
         fast_text, info_dict = _decode_fast(audio, language=None)
@@ -253,16 +241,9 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
                 "text": specialist_text,
             })
             language_guess = "hinglish"
-            language_segments = [{
-                "route": "escalated",
-                "reason": f"p(en)={info_dict['all_language_probs'].get('en', 0):.3f} "
-                          f"p(hi)={info_dict['all_language_probs'].get('hi', 0):.3f}",
-            }]
             final_text = specialist_text
         else:
             final_text = fast_text
-            if language_guess == "en":
-                language_segments = [{"route": "fast", "language": "en"}]
 
     now = time.time()
     asr_ms = (now - asr_start) * 1000
@@ -280,7 +261,6 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
         "raw_candidates": candidates,
         "model_ids": model_ids,
         "local_only": True,
-        "language_segments": language_segments,
     }
 
 
