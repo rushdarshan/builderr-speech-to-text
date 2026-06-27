@@ -22,6 +22,8 @@ import time
 import numpy as np
 import soundfile as sf
 
+from ._post import normalize_numbers
+
 _fast_backend: str | None = None
 _fast_model = None
 _specialist_model = None
@@ -245,6 +247,7 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
         else:
             final_text = fast_text
 
+    final_text = normalize_numbers(final_text)
     now = time.time()
     asr_ms = (now - asr_start) * 1000
     total_ms = (now - t0) * 1000

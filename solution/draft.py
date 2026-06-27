@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 
+from ._post import normalize_numbers
+
 _SR = 16000
 _MIN_AUDIO_BYTES = int(_SR * 0.75) * 2
 
@@ -192,24 +194,26 @@ def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
     global _prev_text, _committed, _planted_initial
 
     if not is_final and len(audio_buffer) < _MIN_AUDIO_BYTES:
-        return (_committed, len(_committed))
+        return (normalize_numbers(_committed), len(_committed))
 
     audio_float = _pcm_to_float32(audio_buffer)
     if audio_float.size == 0:
-        return (_committed, len(_committed))
+        return (normalize_numbers(_committed), len(_committed))
 
     cur_text, info_dict = _decode_fast(audio_float, language=None)
 
     if not cur_text:
-        return (_committed, len(_committed))
+        return (normalize_numbers(_committed), len(_committed))
 
     if is_final:
         if _is_mixed(info_dict):
             specialist_text = _decode_specialist(audio_float)
             if specialist_text:
+                specialist_text = normalize_numbers(specialist_text)
                 _committed = specialist_text
                 _prev_text = specialist_text
                 return (specialist_text, len(specialist_text))
+        cur_text = normalize_numbers(cur_text)
         _committed = cur_text
         _prev_text = cur_text
         return (cur_text, len(cur_text))
@@ -218,12 +222,14 @@ def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
         if not _planted_initial:
             first = _words(cur_text)[:1]
             if first:
-                _committed = first[0]
+                _committed = normalize_numbers(first[0])
             _planted_initial = True
         _prev_text = cur_text
-        return (cur_text, len(_committed))
+        return (normalize_numbers(cur_text), len(_committed))
 
+    cur_text = normalize_numbers(cur_text)
     if _prev_text:
+        _prev_text = normalize_numbers(_prev_text)
         agreed = _common_word_prefix(_prev_text, cur_text)
         if len(agreed) >= len(_committed):
             _committed = agreed
