@@ -17,8 +17,8 @@ _MIN_AUDIO_BYTES = int(_SR * 0.75) * 2
 
 _TRANSLATE_TOKEN = 50358
 
-_EN_CONFIDENCE_FLOOR = 0.85
-_HI_CONFIDENCE_CEILING = 0.15
+_EN_CONFIDENCE_FLOOR = 0.95
+_HI_CONFIDENCE_CEILING = 0.10
 
 _fast_backend: str | None = None
 _fast_model = None
@@ -159,7 +159,7 @@ def _is_mixed(info_dict: dict) -> bool:
     probs = info_dict.get("all_language_probs", {})
     p_en = probs.get("en", 0.0)
     p_hi = probs.get("hi", 0.0)
-    return p_en < _EN_CONFIDENCE_FLOOR and p_hi > _HI_CONFIDENCE_CEILING
+    return p_en < _EN_CONFIDENCE_FLOOR or p_hi > _HI_CONFIDENCE_CEILING
 
 
 def _is_confidently_english(info_dict: dict) -> bool:

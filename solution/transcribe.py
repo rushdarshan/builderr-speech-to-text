@@ -31,8 +31,8 @@ _vad_model = None
 
 _TRANSLATE_TOKEN = 50358
 
-_EN_CONFIDENCE_FLOOR = 0.85
-_HI_CONFIDENCE_CEILING = 0.15
+_EN_CONFIDENCE_FLOOR = 0.95
+_HI_CONFIDENCE_CEILING = 0.10
 
 VAD_PARAMS = {
     "threshold": 0.5,
@@ -186,7 +186,7 @@ def _is_mixed(info_dict: dict) -> bool:
     probs = info_dict.get("all_language_probs", {})
     p_en = probs.get("en", 0.0)
     p_hi = probs.get("hi", 0.0)
-    return p_en < _EN_CONFIDENCE_FLOOR and p_hi > _HI_CONFIDENCE_CEILING
+    return p_en < _EN_CONFIDENCE_FLOOR or p_hi > _HI_CONFIDENCE_CEILING
 
 
 def transcribe(wav_path: str, mode: str = "auto") -> dict:
