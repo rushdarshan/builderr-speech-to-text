@@ -35,6 +35,8 @@ _prev_text: str = ""
 _committed: str = ""
 _planted_initial: bool = False
 _spec_warmed: bool = False
+_spec_bg_faithful: str | None = None
+_spec_bg_thread: threading.Thread | None = None
 
 
 def _load_fast():
@@ -226,11 +228,29 @@ def _warm_specialist():
     threading.Thread(target=_load_specialist, daemon=True).start()
 
 
+def _start_bg_faithful(audio_float):
+    global _spec_bg_faithful, _spec_bg_thread
+    if _spec_bg_thread is not None and _spec_bg_thread.is_alive():
+        return
+    _spec_bg_faithful = None
+    def _run():
+        global _spec_bg_faithful
+        try:
+            text, _, _ = _decode_specialist(audio_float)
+            if text:
+                _spec_bg_faithful = text
+        except Exception:
+            pass
+    _spec_bg_thread = threading.Thread(target=_run, daemon=True)
+    _spec_bg_thread.start()
+
+
 def draft_reset() -> None:
-    global _prev_text, _committed, _planted_initial
+    global _prev_text, _committed, _planted_initial, _spec_bg_faithful
     _prev_text = ""
     _committed = ""
     _planted_initial = False
+    _spec_bg_faithful = None
 
 
 def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
@@ -300,8 +320,14 @@ def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
             if first:
                 _committed = normalize_numbers(first[0])
             _planted_initial = True
+        display = normalize_numbers(cur_text)
+        if _spec_bg_faithful:
+            display = _spec_bg_faithful
+            _spec_bg_faithful = None
+        else:
+            _start_bg_faithful(audio_float)
         _prev_text = cur_text
-        return (normalize_numbers(cur_text), len(_committed))
+        return (display, len(_committed))
 
     cur_text = normalize_numbers(cur_text)
     if _prev_text:
