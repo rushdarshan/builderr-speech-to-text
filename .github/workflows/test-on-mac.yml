@@ -29,6 +29,21 @@ jobs:
       - name: Fetch dev audio
         run: python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio
 
+      - name: Pre-warm model cache
+        run: |
+          python -c "
+import os
+# faster-whisper models
+from faster_whisper import WhisperModel
+WhisperModel('tiny', download_root=None, cpu_threads=1); print('fw-tiny cached')
+WhisperModel('small', download_root=None, cpu_threads=1); print('fw-small cached')
+" 2>&1
+          python -c "
+import mlx_whisper
+mlx_whisper.transcribe('data/dev/audio/fleurs_en_us_test_1674.wav', path_or_hf_repo='mlx-community/whisper-small-mlx')
+print('mlx cached')
+" 2>&1 || echo "mlx not available (expected)"
+
       - name: Run preview (dev set)
         run: |
           set -o pipefail
