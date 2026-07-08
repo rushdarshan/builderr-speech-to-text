@@ -16,13 +16,15 @@ def _main():
     silero_vad.load_silero_vad()
     print("silero-vad cached")
 
-    # 3) mlx-whisper (tiny + small) — only on Apple Silicon
+    # 3) mlx-whisper (tiny) — only on Apple Silicon
+    import glob as _glob
+    wavs = _glob.glob("data/dev/audio/*.wav")[:1]
     try:
-        from huggingface_hub import snapshot_download
-        snapshot_download(repo_id="mlx-community/whisper-tiny-mlx")
-        print("mlx-tiny cached")
-        snapshot_download(repo_id="mlx-community/whisper-small-mlx")
-        print("mlx-small cached")
+        import mlx_whisper
+        result = mlx_whisper.transcribe(
+            wavs[0] if wavs else "", path_or_hf_repo="mlx-community/whisper-tiny",
+        )
+        print("mlx-tiny cached and verified")
     except Exception:
         print("mlx not available (expected without ANE/Metal GPU)")
 
