@@ -33,6 +33,8 @@ jobs:
         run: python scripts/prewarm_models.py
 
       - name: Run preview (dev set)
+        env:
+          HF_HUB_OFFLINE: "1"
         run: |
           set -o pipefail
           python preview.py 2>&1 | tee preview_output.txt
