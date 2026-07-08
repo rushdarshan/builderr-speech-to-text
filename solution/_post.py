@@ -276,6 +276,8 @@ def _words_and_confs(text: str, token_ids: list[int],
         return words, [1.0] * len(words)
 
     token_probs = [math.exp(lp) for lp in token_logprobs]
+    if not token_probs:
+        return words, [1.0] * len(words)
 
     char_to_tok = {}
     char_idx = 0
