@@ -19,7 +19,6 @@ jobs:
         run: |
           pip install --quiet pytest faster-whisper datasets soundfile word2number silero-vad scikit-optimize hindi-normalize
           pip install --quiet mlx-whisper 2>/dev/null || echo "mlx-whisper not available (expected on non-Apple Silicon)"
-          pip install --quiet torch torchaudio torchcodec 2>/dev/null || echo "torchcodec not available"
 
       - name: Run unit tests
         run: |
