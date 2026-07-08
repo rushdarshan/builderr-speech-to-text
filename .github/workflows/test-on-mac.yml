@@ -17,7 +17,7 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install --quiet pytest faster-whisper datasets soundfile word2number silero-vad scikit-optimize hindi-normalize
+          pip install --quiet pytest faster-whisper datasets soundfile word2number silero-vad scikit-optimize hindi-normalize pyarrow
           pip install --quiet mlx-whisper 2>/dev/null || echo "mlx-whisper not available (expected on non-Apple Silicon)"
 
       - name: Run unit tests
@@ -30,7 +30,9 @@ jobs:
         run: python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio
 
       - name: Run preview (dev set)
-        run: python preview.py 2>&1 | tee preview_output.txt
+        run: |
+          set -o pipefail
+          python preview.py 2>&1 | tee preview_output.txt
 
       - name: Upload scorecard
         uses: actions/upload-artifact@v4
