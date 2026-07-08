@@ -279,19 +279,23 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
                 "text": specialist_text,
             })
             language_guess = "hinglish"
-            _, processor = _load_specialist()
-            tok = processor.tokenizer
-            if fast_word_confs is not None:
-                fast_words, fast_confs = fast_text.split(), fast_word_confs
+            lang = info_dict.get("language", "")
+            if lang == "hi":
+                final_text = specialist_text
             else:
-                fast_words, fast_confs = _words_and_confs(
-                    fast_text, info_dict.get("_tokens", []),
-                    info_dict.get("_logprobs", []), tok)
-            spec_words, spec_confs = _words_and_confs(
-                specialist_text, spec_tids, spec_tprobs, tok)
-            final_text = fusion_merge(
-                fast_text, specialist_text,
-                fast_words, fast_confs, spec_words, spec_confs)
+                _, processor = _load_specialist()
+                tok = processor.tokenizer
+                if fast_word_confs is not None:
+                    fast_words, fast_confs = fast_text.split(), fast_word_confs
+                else:
+                    fast_words, fast_confs = _words_and_confs(
+                        fast_text, info_dict.get("_tokens", []),
+                        info_dict.get("_logprobs", []), tok)
+                spec_words, spec_confs = _words_and_confs(
+                    specialist_text, spec_tids, spec_tprobs, tok)
+                final_text = fusion_merge(
+                    fast_text, specialist_text,
+                    fast_words, fast_confs, spec_words, spec_confs)
         else:
             final_text = fast_text
 
