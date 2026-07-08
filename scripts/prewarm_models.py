@@ -28,14 +28,14 @@ def _main():
     except Exception:
         print("mlx not available (expected without ANE/Metal GPU)")
 
-    # 4) Hinglish specialist (transformers)
+    # 4) Hinglish specialist (transformers) — optional, skipped if deps missing
     try:
         from transformers import WhisperForConditionalGeneration, WhisperProcessor
         WhisperProcessor.from_pretrained("Oriserve/Whisper-Hindi2Hinglish-Swift")
         WhisperForConditionalGeneration.from_pretrained("Oriserve/Whisper-Hindi2Hinglish-Swift")
         print("specialist cached")
     except Exception:
-        print("specialist not cached (expected if transformers not installed)")
+        print("specialist not cached (transformers/torch not installed)")
 
 
 if __name__ == "__main__":

@@ -266,38 +266,11 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
         language_guess = info_dict["language"]
         final_text = fast_text
     else:
-        fast_text, info_dict, fast_word_confs = _decode_fast(audio, language=None)
+        fast_text, info_dict, _ = _decode_fast(audio, language=None)
         model_ids = [f"{_fast_backend}-small"]
         candidates = [{"engine": _fast_backend, "text": fast_text}]
         language_guess = info_dict["language"]
-
-        if _is_mixed(info_dict, fast_text):
-            specialist_text, spec_tids, spec_tprobs = _decode_specialist(audio)
-            model_ids.append("Oriserve/Whisper-Hindi2Hinglish-Swift")
-            candidates.append({
-                "engine": "whisper-hindi2hinglish-swift",
-                "text": specialist_text,
-            })
-            language_guess = "hinglish"
-            lang = info_dict.get("language", "")
-            if lang == "hi":
-                final_text = specialist_text
-            else:
-                _, processor = _load_specialist()
-                tok = processor.tokenizer
-                if fast_word_confs is not None:
-                    fast_words, fast_confs = fast_text.split(), fast_word_confs
-                else:
-                    fast_words, fast_confs = _words_and_confs(
-                        fast_text, info_dict.get("_tokens", []),
-                        info_dict.get("_logprobs", []), tok)
-                spec_words, spec_confs = _words_and_confs(
-                    specialist_text, spec_tids, spec_tprobs, tok)
-                final_text = fusion_merge(
-                    fast_text, specialist_text,
-                    fast_words, fast_confs, spec_words, spec_confs)
-        else:
-            final_text = fast_text
+        final_text = fast_text
 
     final_text = normalize_numbers(final_text)
     now = time.time()
