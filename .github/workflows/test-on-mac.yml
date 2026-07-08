@@ -27,7 +27,7 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
       - name: Fetch dev audio
-        run: python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio 2>&1 | tail -5
+        run: python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio
 
       - name: Run preview (dev set)
         run: python preview.py 2>&1 | tee preview_output.txt

@@ -19,7 +19,7 @@ def _fleurs_row(config: str, split: str, fleurs_id: int):
     key = (config, split)
     if key not in _FLEURS_CACHE:
         from datasets import load_dataset
-        ds = load_dataset("google/fleurs", config, split=split)
+        ds = load_dataset("google/fleurs", config, split=split, streaming=True)
         _FLEURS_CACHE[key] = {int(r["id"]): r for r in ds}
     return _FLEURS_CACHE[key].get(fleurs_id)
 
@@ -33,14 +33,14 @@ def fetch_one(clip: dict, out_dir: Path, staged: Path | None) -> str:
     if ref.get("repo") == "google/fleurs":
         try:
             import soundfile as sf
-            fid = int(str(ref["id"]).rsplit("_", 1)[-1])  # fleurs_en_us_test_1904 -> 1904
+            fid = int(str(ref["id"]).rsplit("_", 1)[-1])
             row = _fleurs_row(ref["config"], ref["split"], fid)
             if not row:
                 return "missing(fleurs id not found)"
             sf.write(str(dest), row["audio"]["array"], row["audio"]["sampling_rate"])
             return "fleurs"
         except Exception as e:  # noqa: BLE001
-            return f"error(fleurs:{type(e).__name__})"
+            return f"error(fleurs:{type(e).__name__}:{e})"
     # 2) staged audio store (OpenSLR / YouTube / recorded), matched by filename
     src_name = ref.get("source_audio") or ""
     if staged and src_name:
@@ -56,7 +56,7 @@ def main():
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    manifest = json.load(open(args.manifest))
+    manifest = json.load(open(args.manifest, encoding="utf-8"))
     out_dir = Path(args.out); out_dir.mkdir(parents=True, exist_ok=True)
     staged = os.environ.get("RAMBLEFIX_AUDIO_DIR")
     staged = Path(staged) if staged else None
