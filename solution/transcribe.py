@@ -204,9 +204,8 @@ def _decode_specialist(audio: np.ndarray) -> tuple[str, list[int], list[float]]:
     text_tids: list[int] = []
     text_probs: list[float] = []
     for i, tid in enumerate(token_ids[1:]):
-        if tid in all_special:
+        if tid in all_special or i >= len(scores):
             continue
-        text_tids.append(tid)
         logits = scores[i][0]
         probs = F.softmax(logits, dim=-1)
         text_probs.append(probs[tid].item())
