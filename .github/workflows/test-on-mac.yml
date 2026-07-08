@@ -19,6 +19,7 @@ jobs:
         run: |
           pip install --quiet pytest faster-whisper datasets soundfile word2number silero-vad scikit-optimize hindi-normalize
           pip install --quiet mlx-whisper 2>/dev/null || echo "mlx-whisper not available (expected on non-Apple Silicon)"
+          pip install --quiet torch torchaudio torchcodec 2>/dev/null || echo "torchcodec not available"
 
       - name: Run unit tests
         run: |
@@ -27,7 +28,7 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
       - name: Fetch dev audio
-        run: DATASETS_DECODING_BACKEND=soundfile python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio
+        run: python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio
 
       - name: Run preview (dev set)
         run: python preview.py 2>&1 | tee preview_output.txt
