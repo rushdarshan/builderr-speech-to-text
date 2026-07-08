@@ -12,8 +12,8 @@ def _main():
     print("fw-small cached")
 
     # 2) Silero VAD
-    import torch
-    torch.hub.load(repo_or_dir="snakers4/silero-vad", model="silero_vad")
+    import silero_vad
+    silero_vad.load_silero_vad()
     print("silero-vad cached")
 
     # 3) mlx-whisper (tiny + small) — only on Apple Silicon
