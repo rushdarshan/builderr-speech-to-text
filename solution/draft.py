@@ -11,6 +11,7 @@ the specialist produces the definitive romanized Hinglish transcription.
 from __future__ import annotations
 
 import re
+import threading
 
 from ._post import normalize_numbers, fusion_merge, _words_and_confs, has_hindi_signal
 
@@ -33,6 +34,7 @@ _torch = None
 _prev_text: str = ""
 _committed: str = ""
 _planted_initial: bool = False
+_spec_warmed: bool = False
 
 
 def _load_fast():
@@ -216,6 +218,14 @@ def _common_word_prefix(left: str, right: str) -> str:
     return " ".join(out)
 
 
+def _warm_specialist():
+    global _spec_warmed
+    if _spec_warmed:
+        return
+    _spec_warmed = True
+    threading.Thread(target=_load_specialist, daemon=True).start()
+
+
 def draft_reset() -> None:
     global _prev_text, _committed, _planted_initial
     _prev_text = ""
@@ -226,12 +236,28 @@ def draft_reset() -> None:
 def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
     global _prev_text, _committed, _planted_initial
 
-    if not is_final and len(audio_buffer) < _MIN_AUDIO_BYTES:
-        return (normalize_numbers(_committed), len(_committed))
+    if not is_final:
+        if len(audio_buffer) < _MIN_AUDIO_BYTES:
+            return (normalize_numbers(_committed), len(_committed))
+        _warm_specialist()
 
     audio_float = _pcm_to_float32(audio_buffer)
     if audio_float.size == 0:
         return (normalize_numbers(_committed), len(_committed))
+
+    if is_final:
+        spec_result = []
+        spec_done = threading.Event()
+
+        def _spec_worker():
+            try:
+                spec_result.append(_decode_specialist(audio_float))
+            except Exception:
+                pass
+            finally:
+                spec_done.set()
+
+        threading.Thread(target=_spec_worker, daemon=True).start()
 
     cur_text, info_dict, fast_word_confs = _decode_fast(audio_float, language=None)
 
@@ -240,29 +266,33 @@ def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
 
     if is_final:
         if _is_mixed(info_dict, cur_text):
-            specialist_text, spec_tids, spec_tprobs = _decode_specialist(audio_float)
-            if specialist_text:
-                _, processor = _load_specialist()
-                tok = processor.tokenizer
-                if fast_word_confs is not None:
-                    fast_words, fast_confs = cur_text.split(), fast_word_confs
-                else:
-                    fast_words, fast_confs = _words_and_confs(
-                        cur_text, info_dict.get("_tokens", []),
-                        info_dict.get("_logprobs", []), tok)
-                spec_words, spec_confs = _words_and_confs(
-                    specialist_text, spec_tids, spec_tprobs, tok)
-                fused = fusion_merge(
-                    cur_text, specialist_text,
-                    fast_words, fast_confs, spec_words, spec_confs)
-                fused = normalize_numbers(fused)
-                _committed = fused
-                _prev_text = fused
-                return (fused, len(fused))
-        cur_text = normalize_numbers(cur_text)
-        _committed = cur_text
-        _prev_text = cur_text
-        return (cur_text, len(cur_text))
+            spec_done.wait(timeout=1.5)
+            if spec_result:
+                specialist_text, spec_tids, spec_tprobs = spec_result[0]
+                if specialist_text:
+                    _, processor = _load_specialist()
+                    tok = processor.tokenizer
+                    if fast_word_confs is not None:
+                        fast_words, fast_confs = cur_text.split(), fast_word_confs
+                    else:
+                        fast_words, fast_confs = _words_and_confs(
+                            cur_text, info_dict.get("_tokens", []),
+                            info_dict.get("_logprobs", []), tok)
+                    spec_words, spec_confs = _words_and_confs(
+                        specialist_text, spec_tids, spec_tprobs, tok)
+                    fused = fusion_merge(
+                        cur_text, specialist_text,
+                        fast_words, fast_confs, spec_words, spec_confs)
+                    fused = normalize_numbers(fused)
+                    _committed = fused
+                    _prev_text = fused
+                    return (fused, len(fused))
+        if cur_text:
+            cur_text = normalize_numbers(cur_text)
+            _committed = cur_text
+            _prev_text = cur_text
+            return (cur_text, len(cur_text))
+        return (normalize_numbers(_committed), len(_committed))
 
     if not _is_confidently_english(info_dict):
         if not _planted_initial:
