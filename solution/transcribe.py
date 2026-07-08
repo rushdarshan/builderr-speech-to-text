@@ -131,7 +131,6 @@ def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, d
             compression_ratio_threshold=2.2,
             logprob_threshold=-1.0,
             no_speech_threshold=0.6,
-            no_repeat_ngram_size=3,
             suppress_tokens=[_TRANSLATE_TOKEN],
             word_timestamps=False,
         )
