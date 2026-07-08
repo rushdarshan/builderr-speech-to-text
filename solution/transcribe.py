@@ -22,7 +22,7 @@ import time
 import numpy as np
 import soundfile as sf
 
-from ._post import normalize_numbers
+from ._post import normalize_numbers, fusion_merge, _words_and_confs
 
 _fast_backend: str | None = None
 _fast_model = None
@@ -118,7 +118,7 @@ def _vad_trim(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
     return audio[start:end]
 
 
-def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, dict]:
+def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, dict, list[float] | None]:
     if _fast_backend == "mlx-whisper":
         import mlx_whisper
         result = mlx_whisper.transcribe(
@@ -137,11 +137,18 @@ def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, d
         )
         text = (result.get("text") or "").strip()
         lang = result.get("language", language or "en")
+        all_tokens: list[int] = []
+        all_logprobs: list[float] = []
+        for seg in result.get("segments", []):
+            all_tokens.extend(seg.get("tokens", []))
+            all_logprobs.extend(seg.get("logprobs", []))
         return text, {
             "language": lang,
             "language_probability": 1.0,
             "all_language_probs": {lang: 1.0},
-        }
+            "_tokens": all_tokens,
+            "_logprobs": all_logprobs,
+        }, None
     model = _load_fast()
     segments, info = model.transcribe(
         audio,
@@ -155,20 +162,26 @@ def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, d
         no_repeat_ngram_size=3,
         vad_filter=False,
         suppress_tokens=[_TRANSLATE_TOKEN],
+        word_timestamps=True,
     )
     text = " ".join(s.text for s in segments).strip()
     lang_probs = dict(info.all_language_probs) if info.all_language_probs else {}
+    word_confs: list[float] = []
+    for s in segments:
+        for w in getattr(s, 'words', []):
+            word_confs.append(w.probability if hasattr(w, 'probability') else 1.0)
     return text, {
         "language": info.language,
         "language_probability": float(info.language_probability),
         "all_language_probs": lang_probs,
         "duration": float(info.duration) if hasattr(info, "duration") else 0.0,
-    }
+    }, word_confs or None
 
 
-def _decode_specialist(audio: np.ndarray) -> str:
+def _decode_specialist(audio: np.ndarray) -> tuple[str, list[int], list[float]]:
     model, processor = _load_specialist()
     import torch
+    import torch.nn.functional as F
     inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features.to(_specialist_device)
     with torch.no_grad():
@@ -176,12 +189,26 @@ def _decode_specialist(audio: np.ndarray) -> str:
             input_features,
             task="transcribe",
             return_timestamps=False,
+            output_scores=True,
+            return_dict_in_generate=True,
             no_repeat_ngram_size=3,
             max_length=448,
             suppress_tokens=[_TRANSLATE_TOKEN],
         )
-    text = processor.batch_decode(generated.cpu(), skip_special_tokens=True)[0]
-    return text.strip()
+    token_ids = generated.sequences[0].tolist()
+    scores = generated.scores
+    all_special = set(processor.tokenizer.all_special_ids)
+    text_tids: list[int] = []
+    text_probs: list[float] = []
+    for i, tid in enumerate(token_ids[1:]):
+        if tid in all_special:
+            continue
+        text_tids.append(tid)
+        logits = scores[i][0]
+        probs = F.softmax(logits, dim=-1)
+        text_probs.append(probs[tid].item())
+    text = processor.batch_decode(generated.sequences, skip_special_tokens=True)[0]
+    return text.strip(), text_tids, text_probs
 
 
 def _is_mixed(info_dict: dict) -> bool:
@@ -212,38 +239,50 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
     info_dict: dict = {}
 
     if mode == "hinglish":
-        specialist_text = _decode_specialist(audio)
+        specialist_text, _, _ = _decode_specialist(audio)
         model_ids = ["Oriserve/Whisper-Hindi2Hinglish-Swift"]
         candidates = [{"engine": "whisper-hindi2hinglish-swift", "text": specialist_text}]
         language_guess = "hinglish"
         final_text = specialist_text
     elif mode == "fast":
-        fast_text, info_dict = _decode_fast(audio, language="en")
+        fast_text, info_dict, _ = _decode_fast(audio, language="en")
         model_ids = [f"{_fast_backend}-small"]
         candidates = [{"engine": _fast_backend, "text": fast_text}]
         language_guess = info_dict["language"]
         final_text = fast_text
     elif mode == "verbatim":
-        fast_text, info_dict = _decode_fast(audio, language=None)
+        fast_text, info_dict, _ = _decode_fast(audio, language=None)
         model_ids = [f"{_fast_backend}-small"]
         candidates = [{"engine": _fast_backend, "text": fast_text}]
         language_guess = info_dict["language"]
         final_text = fast_text
     else:
-        fast_text, info_dict = _decode_fast(audio, language=None)
+        fast_text, info_dict, fast_word_confs = _decode_fast(audio, language=None)
         model_ids = [f"{_fast_backend}-small"]
         candidates = [{"engine": _fast_backend, "text": fast_text}]
         language_guess = info_dict["language"]
 
         if _is_mixed(info_dict):
-            specialist_text = _decode_specialist(audio)
+            specialist_text, spec_tids, spec_tprobs = _decode_specialist(audio)
             model_ids.append("Oriserve/Whisper-Hindi2Hinglish-Swift")
             candidates.append({
                 "engine": "whisper-hindi2hinglish-swift",
                 "text": specialist_text,
             })
             language_guess = "hinglish"
-            final_text = specialist_text
+            _, processor = _load_specialist()
+            tok = processor.tokenizer
+            if fast_word_confs is not None:
+                fast_words, fast_confs = fast_text.split(), fast_word_confs
+            else:
+                fast_words, fast_confs = _words_and_confs(
+                    fast_text, info_dict.get("_tokens", []),
+                    info_dict.get("_logprobs", []), tok)
+            spec_words, spec_confs = _words_and_confs(
+                specialist_text, spec_tids, spec_tprobs, tok)
+            final_text = fusion_merge(
+                fast_text, specialist_text,
+                fast_words, fast_confs, spec_words, spec_confs)
         else:
             final_text = fast_text
 
