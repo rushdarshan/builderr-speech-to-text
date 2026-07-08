@@ -27,6 +27,8 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
       - name: Fetch dev audio
+        env:
+          RAMBLEFIX_AUDIO_DIR: ${{ secrets.RAMBLEFIX_AUDIO_DIR }}
         run: python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio
 
       - name: Pre-warm model cache
