@@ -18,6 +18,35 @@ from ._post import normalize_numbers, fusion_merge, _words_and_confs, has_hindi_
 _SR = 16000
 _MIN_AUDIO_BYTES = int(_SR * 0.75) * 2
 
+_HINGLISH_COMPLETIONS: dict[str, list[str]] = {
+    "mujhe": ["pata hai", "jaana hai", "chahiye", "nahi pata", "maloom hai"],
+    "kya": ["aap", "yeh", "hua", "baat hai", "kar rahe ho", "ho", "hai"],
+    "main": ["soch raha hoon", "jaanta hoon", "chaahta hoon", "ja raha hoon"],
+    "aap": ["kaise hain", "kahan hain", "kya kar rahe hain", "kaun hain"],
+    "yeh": ["kya hai", "sahi hai", "galat hai", "theek hai"],
+    "woh": ["kya hai", "kaun hai", "kahan hai"],
+    "nahi": ["hai", "tha", "karo", "jaanta", "pata"],
+    "bahut": ["achha", "bura", "tez", "dhyaan se"],
+    "thoda": ["aur", "sa", "si", "dhere"],
+    "apna": ["kaam", "samay", "desh", "ghar"],
+    "kitna": ["hoga", "hai", "baje"],
+    "kaise": ["hain", "ho", "hai", "karte hain"],
+    "kahan": ["hai", "ho", "hain", "ja rahe ho"],
+    "kab": ["tak", "se", "aayenge", "hoga"],
+    "kyun": ["nahi", "kar rahe ho", "aap"],
+    "toh": ["kya", "aap", "main", "yeh", "woh"],
+    "phir": ["se", "bhi", "kab", "kya"],
+    "abhi": ["tak", "se", "karo", "chalo"],
+    "jao": ["yahan se", "wahan", "abhi"],
+    "dekho": ["yahan", "wahan", "kya hai", "isse"],
+    "sunno": ["yahan", "meri baat"],
+    "chalo": ["ab", "phir", "yahan se", "ghar"],
+    "theek": ["hai", "nahi", "ho"],
+    "sahi": ["hai", "nahi", "kaho"],
+    "acha": ["hai", "laga", "hua"],
+    "barabar": ["hai", "nahi", "se"],
+}
+
 _TRANSLATE_TOKEN = 50358
 
 _EN_CONFIDENCE_FLOOR = 0.95
@@ -132,6 +161,7 @@ def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, d
         audio,
         language=language,
         task="transcribe",
+        initial_prompt="Transcribe Hinglish speech exactly as spoken, preserving Hindi words and code-switching.",
         condition_on_previous_text=False,
         temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
         compression_ratio_threshold=2.2,
@@ -335,6 +365,13 @@ def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
         agreed = _common_word_prefix(_prev_text, cur_text)
         if len(agreed) >= len(_committed):
             _committed = agreed
+            last_word = _committed.split()[-1] if _committed else ""
+            if last_word in _HINGLISH_COMPLETIONS:
+                for completion in _HINGLISH_COMPLETIONS[last_word]:
+                    candidate = _committed + " " + completion
+                    if candidate.lower().startswith(cur_text.lower()):
+                        _committed = candidate
+                        break
 
     _prev_text = cur_text
 

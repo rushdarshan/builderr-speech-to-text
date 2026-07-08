@@ -1,0 +1,39 @@
+name: test-on-mac
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          pip install --quiet faster-whisper datasets soundfile word2number silero-vad scikit-optimize hindi-normalize
+          pip install --quiet mlx-whisper 2>/dev/null || echo "mlx-whisper not available (expected on non-Apple Silicon)"
+
+      - name: Run unit tests
+        run: |
+          python tests/test_scorecard.py
+          python tests/test_no_network.py
+          python -m pytest tests/ -v --tb=short
+
+      - name: Fetch dev audio
+        run: python scripts/fetch_audio.py --manifest data/dev/manifest.json --out data/dev/audio 2>&1 | tail -5
+
+      - name: Run preview (dev set)
+        run: python preview.py 2>&1 | tee preview_output.txt
+
+      - name: Upload scorecard
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-scorecard
+          path: preview_output.txt

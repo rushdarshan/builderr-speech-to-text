@@ -37,11 +37,11 @@ _EN_CONFIDENCE_FLOOR = 0.95
 _HI_CONFIDENCE_CEILING = 0.10
 
 VAD_PARAMS = {
-    "threshold": 0.5,
+    "threshold": 0.3,
     "min_speech_duration_ms": 250,
-    "min_silence_duration_ms": 100,
+    "min_silence_duration_ms": 750,
     "window_size_samples": 512,
-    "speech_pad_ms": 30,
+    "speech_pad_ms": 400,
 }
 
 
@@ -154,6 +154,7 @@ def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, d
         audio,
         language=language,
         task="transcribe",
+        initial_prompt="Transcribe Hinglish speech exactly as spoken, preserving Hindi words and code-switching.",
         condition_on_previous_text=False,
         temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
         compression_ratio_threshold=2.2,
