@@ -17,7 +17,7 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install --quiet faster-whisper datasets soundfile word2number silero-vad scikit-optimize hindi-normalize
+          pip install --quiet pytest faster-whisper datasets soundfile word2number silero-vad scikit-optimize hindi-normalize
           pip install --quiet mlx-whisper 2>/dev/null || echo "mlx-whisper not available (expected on non-Apple Silicon)"
 
       - name: Run unit tests
