@@ -127,7 +127,7 @@ def _decode_fast(audio: np.ndarray, language: str | None = None) -> tuple[str, d
         result = mlx_whisper.transcribe(
             audio,
             path_or_hf_repo="mlx-community/whisper-tiny",
-            language=language or "en",
+            language=language,
             task="transcribe",
             condition_on_previous_text=False,
             temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
