@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from ._post import normalize_numbers, fusion_merge, _words_and_confs
+from ._post import normalize_numbers, fusion_merge, _words_and_confs, has_hindi_signal
 
 _SR = 16000
 _MIN_AUDIO_BYTES = int(_SR * 0.75) * 2
@@ -186,11 +186,15 @@ def _decode_specialist(audio: np.ndarray) -> tuple[str, list[int], list[float]]:
     return text.strip(), text_tids, text_probs
 
 
-def _is_mixed(info_dict: dict) -> bool:
+def _is_mixed(info_dict: dict, text: str | None = None) -> bool:
     probs = info_dict.get("all_language_probs", {})
     p_en = probs.get("en", 0.0)
     p_hi = probs.get("hi", 0.0)
-    return p_en < _EN_CONFIDENCE_FLOOR or p_hi > _HI_CONFIDENCE_CEILING
+    if p_en < _EN_CONFIDENCE_FLOOR or p_hi > _HI_CONFIDENCE_CEILING:
+        return True
+    if text and has_hindi_signal(text):
+        return True
+    return False
 
 
 def _is_confidently_english(info_dict: dict) -> bool:
@@ -235,7 +239,7 @@ def draft(audio_buffer: bytes, is_final: bool) -> tuple[str, int]:
         return (normalize_numbers(_committed), len(_committed))
 
     if is_final:
-        if _is_mixed(info_dict):
+        if _is_mixed(info_dict, cur_text):
             specialist_text, spec_tids, spec_tprobs = _decode_specialist(audio_float)
             if specialist_text:
                 _, processor = _load_specialist()

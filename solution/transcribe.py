@@ -22,7 +22,7 @@ import time
 import numpy as np
 import soundfile as sf
 
-from ._post import normalize_numbers, fusion_merge, _words_and_confs
+from ._post import normalize_numbers, fusion_merge, _words_and_confs, has_hindi_signal
 
 _fast_backend: str | None = None
 _fast_model = None
@@ -211,11 +211,15 @@ def _decode_specialist(audio: np.ndarray) -> tuple[str, list[int], list[float]]:
     return text.strip(), text_tids, text_probs
 
 
-def _is_mixed(info_dict: dict) -> bool:
+def _is_mixed(info_dict: dict, text: str | None = None) -> bool:
     probs = info_dict.get("all_language_probs", {})
     p_en = probs.get("en", 0.0)
     p_hi = probs.get("hi", 0.0)
-    return p_en < _EN_CONFIDENCE_FLOOR or p_hi > _HI_CONFIDENCE_CEILING
+    if p_en < _EN_CONFIDENCE_FLOOR or p_hi > _HI_CONFIDENCE_CEILING:
+        return True
+    if text and has_hindi_signal(text):
+        return True
+    return False
 
 
 def transcribe(wav_path: str, mode: str = "auto") -> dict:
@@ -262,7 +266,7 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
         candidates = [{"engine": _fast_backend, "text": fast_text}]
         language_guess = info_dict["language"]
 
-        if _is_mixed(info_dict):
+        if _is_mixed(info_dict, fast_text):
             specialist_text, spec_tids, spec_tprobs = _decode_specialist(audio)
             model_ids.append("Oriserve/Whisper-Hindi2Hinglish-Swift")
             candidates.append({

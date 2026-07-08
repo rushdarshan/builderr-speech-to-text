@@ -15,6 +15,29 @@ def _try_num(word: str) -> str | None:
         return None
 
 
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
+
+_HINDI_MARKERS = frozenset({
+    "hai", "hain", "tha", "thi", "nahi", "nahin", "kya", "kyun", "kyon",
+    "kaise", "kaun", "kahan", "kab", "matlab", "abhi", "pehle", "baad",
+    "lekin", "magar", "aur", "karo", "karna", "karenge", "sikhenge", "dekho",
+    "dekhna", "chahiye", "bhi", "yeh", "woh", "iska", "uska", "humko", "humne",
+    "aapko", "aapne", "tumko", "mein", "unka", "uska", "raha", "rahi", "rahe",
+    "gaya", "gayi", "gaye", "mat", "abhi", "kyunki", "isliye", "phir", "wala",
+    "wali", "wale", "bata", "batao", "sunna", "sunno", "kijiye", "kijiyega",
+})
+
+
+def has_hindi_signal(text: str) -> bool:
+    """Check if text contains Devanagari script or Hindi lexical markers."""
+    if not text:
+        return False
+    if _DEVANAGARI_RE.search(text):
+        return True
+    words = set(w.lower() for w in _TOKEN_RE.findall(text))
+    return len(words & _HINDI_MARKERS) >= 2
+
+
 def normalize_numbers(text: str) -> str:
     """Convert English number-words to digits.
 
