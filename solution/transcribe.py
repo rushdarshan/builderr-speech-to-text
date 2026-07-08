@@ -96,11 +96,14 @@ def _load_vad():
     return _vad_model
 
 
-def _read_audio(wav_path: str) -> tuple[np.ndarray, int]:
-    audio, sr = sf.read(wav_path)
-    if audio.ndim > 1:
-        audio = audio.mean(axis=1)
-    return audio.astype(np.float32), sr if sr == 16000 else 16000
+def _read_audio(wav_path: str) -> tuple[np.ndarray, int] | None:
+    try:
+        audio, sr = sf.read(wav_path)
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        return audio.astype(np.float32), sr if sr == 16000 else 16000
+    except Exception:
+        return None
 
 
 def _vad_trim(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
@@ -231,7 +234,10 @@ def transcribe(wav_path: str, mode: str = "auto") -> dict:
               "hinglish" (specialist only), or "verbatim" (whisper auto-lang).
     """
     t0 = time.time()
-    audio, sr = _read_audio(wav_path)
+    r = _read_audio(wav_path)
+    if r is None:
+        return {"text": "", "model_ids": [], "mode_used": "error", "timings_ms": {"total": 0, "asr": 0}, "local_only": True}
+    audio, sr = r
     audio = _vad_trim(audio, sr)
     asr_start = time.time()
 
